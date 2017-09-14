@@ -1,0 +1,143 @@
+{
+  "Description" : "Template to create a Big Data Analysis Instance",
+  "Parameters" : {
+    "KeyName" : {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+      "Type" : "AWS::EC2::KeyPair::KeyName"
+    },
+
+    "SubnetId" : {
+      "Type" : "String",
+      "Description" : "SubnetId of an existing Private subnet in your Virtual Private Cloud (VPC)"
+    },
+    "VpcId" : {
+      "Type" : "String",
+      "Description" : "VpcId of your existing Virtual Private Cloud (VPC)"
+    },
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "p2.xlarge",
+      "AllowedValues" : [ 
+        "p2.xlarge",
+        "p2.8xlarge",
+        "p2.16xlarge",
+      ],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    }
+  },
+  
+  "Mappings" : {
+    "AWSRegionArch2AMI" : {
+      "us-east-1"      : { "AMI" : "ami-1624987f" }
+    }
+  },
+  
+  "Resources" : {
+    "MyEIP" : {
+      "Type" : "AWS::EC2::EIP",
+      "DeletionPolicy" : "Delete",
+      "Properties" : {
+        "Domain" : "vpc"
+      }
+    },
+    
+    "EIPAssoc" : {
+      "Type" : "AWS::EC2::EIPAssociation",
+      "DeletionPolicy" : "Delete" ,
+      "Properties" : {
+        "AllocationId" : { "Fn::GetAtt" : [ "MyEIP", "AllocationId" ]},
+        "NetworkInterfaceId" : { "Ref" : "controlXface" }
+      }
+    },
+    
+    "controlXface" : {
+      "Type" : "AWS::EC2::NetworkInterface",
+      "DeletionPolicy" : "Delete",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "SubnetId" },
+        "Description" :"Interface for control traffic such as SSH",
+        "GroupSet" : [ {"Ref" : "InstanceSecurityGroup"} ],
+        "SourceDestCheck" : "true",
+        "Tags" : [ {"Key" : "Name", "Value" : "OpenVPN-AS"}]
+      }
+    },
+       
+    "WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    },
+    
+    "WaitCondition" : {
+      "Type" : "AWS::CloudFormation::WaitCondition",
+      "DependsOn" : "Ec2Instance",
+      "Properties" : {
+        "Handle" : { "Ref" : "WaitHandle" },
+        "Timeout" : "1200"
+      }
+    },
+
+    
+ 
+      "Ec2Instance" : {
+      "Type" : "AWS::EC2::Instance",
+      "DeletionPolicy" : "Delete",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config" : {
+            "packages" : {
+              "yum" : {
+                "s3cmd" : [],
+                "emacs" : []
+              }
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "ImageId" : { "Fn::FindInMap" : [ "AWSRegionArch2AMI", { "Ref" : "AWS::Region" }, "AMI" ] },
+        "KeyName" : { "Ref" : "KeyName" },
+        "InstanceType" : { "Ref" : "InstanceType" },
+         "Tags" : [ {"Key" : "Name", "Value" : "OpenVPN-AS"}],
+        "NetworkInterfaces" : [ { "NetworkInterfaceId" : {"Ref" : "controlXface"}, "DeviceIndex" : "0" } ],
+        "UserData" : { "Fn::Base64" : { "Fn::Join" : ["", [  
+            "#!/bin/bash -v\n",
+            "yum update -y \n",
+            "# Helper function\n",
+                "function error_exit\n",
+                "{\n",
+                "  /opt/aws/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+                "  exit 1\n",
+                "}\n",
+                "# All is well so signal success\n",
+                "/opt/aws/bin/cfn-signal -e 0 -r \"OpenVPN AS Server setup complete\" '", { "Ref" : "WaitHandle" }, "'\n"
+        ]] } }
+      }
+    },  
+    "InstanceSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "DeletionPolicy" : "Delete",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VpcId" },
+        "GroupDescription" : "Enable SSH access via port 22",
+        "SecurityGroupIngress" : [ {
+          "IpProtocol" : "tcp",
+          "FromPort" : "22",
+          "ToPort" : "22",
+          "CidrIp" : "0.0.0.0/0"
+        } ]
+      }
+    }
+  },
+  
+  "Outputs" : {
+    "IPAddress" : {
+      "Value" : { "Ref" : "MyEIP" },
+      "Description" : "Public IP address of instance"
+    },
+    
+    "InstanceId" : {
+      "Value" : { "Ref" : "Ec2Instance" },
+      "Description" : "Instance Id of newly created instance"
+    }
+  }
+}
